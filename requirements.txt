@@ -1,0 +1,24 @@
+# pipenv lock --pre --clear
+Bottleneck
+Shapely
+click
+defusedxml
+eodag # include boto3 if this is removed
+netCDF4
+numpy==1.22.4
+owslib
+pandas
+pipdeptree
+pyorbital
+pyproj==3.2.1
+pytest
+python-geotiepoints
+pyyaml
+rasterio
+rioxarray
+s3fs
+satpy[msi_safe,sar_c]
+scikit-learn
+sentinelhub
+shapely
+xarray
