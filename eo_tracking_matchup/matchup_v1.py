@@ -1,5 +1,5 @@
 # Example
-# python3 -m matchup "Tag42288_NrM6.csv" "Tag42288_NrM6_eo.csv"
+# python3 matchup_v1.py "Tag42288_NrM6.csv" "Tag42288_NrM6_eo.csv"
 
 from datetime import timedelta
 import numpy as np
@@ -22,28 +22,28 @@ config_sh.sh_client_id = config_s3.sh_client_id
 config_sh.sh_client_secret = config_s3.sh_client_secret
 config_sh.sh_base_url = 'https://creodias.sentinel-hub.com'
 
-res = 0.0002
-buffer_days = 10
-cache_size = 1024
+RES = 0.0002
+RES_CLOUDS = 0.01
+BUFFER_DAYS = 5
+CACHE_SIZE = 2 ** 14
 
 evalscript_cloud = """
-    //VERSION=3
+//VERSION=3
+function setup() {
+    return {
+        input: [{
+            bands: ["CLM"]
+        }],
+        output: {
+            bands: 2,
+            sampleType: SampleType.UINT8
+        }
+    };
+}
 
-    function setup() {
-        return {
-            input: [{
-                bands: ["CLM"]
-            }],
-            output: {
-                bands: 1,
-                sampleType: SampleType.UINT8
-            }
-        };
-    }
-
-    function evaluatePixel(sample) {
-        return [sample.CLM];
-    }
+function evaluatePixel(sample) {
+    return [255, sample.CLM];
+}
 """
 
 # https://custom-scripts.sentinel-hub.com/custom-scripts/sentinel-2/ndmi/#
@@ -51,14 +51,14 @@ evalscript_ndmi = """
 //VERSION=3
 function setup() 
 {
-    return {input: [{bands: ["B8A", "B11"],}],
-            output: {bands: 1, sampleType: SampleType.FLOAT32}}
+    return {input: [{bands: ["B8A", "B11", "CLM"],}],
+            output: {bands: 2, sampleType: SampleType.FLOAT32}}
 }
 
 function evaluatePixel(sample) 
 {
 NDMI = (sample.B8A - sample.B11)/(sample.B8A + sample.B11);
-return [NDMI]
+return [NDMI, sample.CLM]
 }
 """
 
@@ -87,58 +87,48 @@ class SearchCatalogue:
     def __init__(self, resolution, buffer_days=10):
         self.resolution = resolution
         self.buffer_days = buffer_days
-
         self.catalog = SentinelHubCatalog(config=config_sh)
-        self.lon = None
-        self.lat = None
-        self.datetime_center = None
 
-    # @lru_cache(cache_size)
-    def search_catalogue(self, lon, lat, datetime_center):
+    def search_catalogue(self, datetime_center, lon, lat):
         """
-        lat: latitude / resolution
-        lon: longitude / resolution
+        lat: latitude
+        lon: longitude
         """
         sh_bbox = lon_lat_to_bbox(lon, lat, self.resolution)
         start = (datetime_center - timedelta(self.buffer_days)).strftime(date_fornat)
         stop = (datetime_center + timedelta(self.buffer_days)).strftime(date_fornat)
-        return list(self.catalog.search(DataCollection.SENTINEL2_L2A,
-                                        bbox=sh_bbox,
-                                        time=(start, stop),
-                                        query={"eo:cloud_cover": {"lt": 100}},
-                                        fields={"include": ["id", "properties.datetime", "properties.eo:cloud_cover"],
-                                                "exclude": []}))
+        return self.catalog.search(DataCollection.SENTINEL2_L2A,
+                                   bbox=sh_bbox,
+                                   time=(start, stop),
+                                   query={"eo:cloud_cover": {"lt": 100}},
+                                   fields={"include": ["id", "properties.datetime", "properties.eo:cloud_cover"],
+                                           "exclude": []})
 
-    def acquisition_time_diff_and_acquisition(self, timestamp: datetime):
+    def acquisition_time_diff_and_acquisition(self, timestamp: datetime, lon: float, lat: float):
         """
         arguments:
-            tracking timestamp
-            bounding box
+            timestamp: tracking timestamp
+            lon: longitude
+            lat: latitude
 
         returns:
-            absoiute time difference from tracking timestamp and satellite aquisation date
+            absolute time difference from tracking timestamp and satellite acquisition date
             catalogue result
         """
         # use date (instead of timestamp) in cataluge search so that lru cache works
-        search_iterator = self.search_catalogue(self.lon, self.lat, self.datetime_center.date())
+        search_iterator = self.search_catalogue(timestamp.date(), lon, lat)
         for cat_result in search_iterator:
             acq_time = datetime.strptime(cat_result['properties']['datetime'], date_fornat)
             yield abs(acq_time - timestamp), cat_result
 
-    def get_results(self, timestamp, lon, lat, use_previous_results=False):
-        if not use_previous_results:
-            self.lon = lon
-            self.lat = lat
-        self.datetime_center = timestamp
-        sorted_res = sorted(self.acquisition_time_diff_and_acquisition(timestamp), key=lambda x: x[0])
-        yield from sorted_res
+    def get_results(self, timestamp, lon, lat):
+        yield from sorted(self.acquisition_time_diff_and_acquisition(timestamp, lon, lat), key=lambda x: x[0])
 
 
-# @lru_cache(cache_size)
 def get_request(timestamp, javascript, lon, lat, resolution, size):
     """
-    lat: latitude / resolution
-    lon: longitude / resolution
+    lat: latitude
+    lon: longitude
     """
 
     sh_bbox = lon_lat_to_bbox(lon, lat, resolution)
@@ -157,26 +147,45 @@ def get_request(timestamp, javascript, lon, lat, resolution, size):
     return req.get_data()
 
 
-cat = SearchCatalogue(res, buffer_days)
+cat = SearchCatalogue(RES, BUFFER_DAYS)
 
 
-def get_acquisition_time_and_eo_data(timestamp, javascript, lon, lat, size, use_previous_results=False):
-    search_iterator = sorted(cat.get_results(timestamp, lon, lat, use_previous_results=use_previous_results),
+def get_acquisition_time_and_eo_data(timestamp, javascript, lon, lat, size):
+    search_iterator = sorted(cat.get_results(timestamp, lon, lat),
                              key=lambda x: x[0])
     for search_res in search_iterator:
         acquisition_timestamp = search_res[1]['properties']['datetime']
-        data = get_request(acquisition_timestamp, javascript, lon, lat, res, size)
-        yield datetime.strptime(acquisition_timestamp, date_fornat), data[0][0][0]
+        data = get_request(acquisition_timestamp, javascript, lon, lat, RES, size)
+        eo_res, cloud_check = list(data[0][0][0])
+        yield datetime.strptime(acquisition_timestamp, date_fornat), eo_res, cloud_check
+
+
+@lru_cache(CACHE_SIZE)
+def get_acquisition_time_and_eo_data_first(*args, **kwargs):
+    return next(get_acquisition_time_and_eo_data(*args, **kwargs))
+
+
+@lru_cache(CACHE_SIZE)
+def get_acquisition_time_and_eo_data_cloud(*args, **kwargs):
+    return list(get_acquisition_time_and_eo_data(*args, **kwargs))
 
 
 def eo_data(timestamp, lon, lat):
     print(timestamp)
     # Get cloud mask for each satellite acquisition, starting from the nearest in time
-    for acq_time, cloud in get_acquisition_time_and_eo_data(timestamp, evalscript_cloud, lon, lat, (1, 1)):
+    # Round the inputs to get some speed ut with LRU cache.
+    for acq_time, _, cloud in get_acquisition_time_and_eo_data_cloud(timestamp.round('6H'), evalscript_cloud,
+                                                                     RES_CLOUDS * (lon // RES_CLOUDS),
+                                                                     RES_CLOUDS * (lat // RES_CLOUDS), (1, 1)):
         if not cloud:
             # Return the cloud-free EO data
-            eo_res = next(get_acquisition_time_and_eo_data(acq_time, evalscript_ndmi, lon, lat, (1, 1)))
-            return eo_res
+            timestamp_res, eo_res, cloud_check = \
+                get_acquisition_time_and_eo_data_first(acq_time,
+                                                       evalscript_ndmi,
+                                                       RES * (lon // RES),
+                                                       RES * (lat // RES), (1, 1))
+            if not cloud_check:
+                return timestamp_res, eo_res
     else:
         return pd.NaT, np.nan
 
@@ -184,16 +193,16 @@ def eo_data(timestamp, lon, lat):
 @click.command()
 @click.argument('fname_input')
 @click.argument('fname_output')
-def main(fname_input, fname_output):
+def main(fname_input: str, fname_output: str):
     t1 = time.time()
 
-    df = pd.read_csv(fname_input, parse_dates=[1])
-    # df = df.iloc[0:100]
+    nrows = 1000  # limit the number of rows for testing
+    df = pd.read_csv(fname_input, parse_dates=[8], nrows=nrows, dayfirst=True)
     df = df.set_index('Date_Time')
-    df['lon_'] = df['LONG']
-    df['lat_'] = df['LAT']
+    df['lon_'] = df['Longitude']
+    df['lat_'] = df['Latitude']
 
-    ddf = dd.from_pandas(df, npartitions=10)
+    ddf = dd.from_pandas(df, npartitions=100)
     result = ddf.apply(lambda r: eo_data(r.name, r['lon_'], r['lat_']), axis=1, meta=('datetime64[ns]', np.float32))
     result = result.compute()
     result = pd.DataFrame(result.to_list(), index=result.index, columns=('EO_TimeStamp', 'EO_NDMI'))

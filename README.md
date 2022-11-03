@@ -11,16 +11,16 @@ graph TD
     C --> |Yes| D(Retrieve & store EO value) 
 ```
 
-This is implemented in matchup_v1. 
-matchup_v2 is the Sentinel Hub Statistics API, but it is slower, 
-so use matchup_v1.
+This is implemented in matchup_v1.py. 
+matchup_v2.py does the same as matchup_v1.py, but uses the Sentinel Hub Statistics API, but it is slower, 
+so use matchup_v1.py.
 
 
 # Usage 
 
-    python3 matchup_v1 in.csv out.csv
+    python3 matchup_v1.py in.csv out.csv
 
 # Modify EO variables 
 
-See "evalscript_ndmi" in the matchup_v1 for the JavaScript code that returns gets the EO value.
+See "evalscript_ndmi" in the matchup_v1.py for the JavaScript code that returns gets the EO value.
 Modify it to get other EO variables.
