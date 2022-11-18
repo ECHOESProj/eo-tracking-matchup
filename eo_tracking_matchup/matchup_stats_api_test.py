@@ -1,19 +1,21 @@
-from os.path import join
-from datetime import timedelta
-import numpy as np
-from sentinelhub import SHConfig
-from datetime import datetime
-import pandas as pd
-import dask.dataframe as dd
-from dask.distributed import Client
-import eo_io
+#  matchup_v1.py is faster, so use that one
+
 import re
-from sentinelhub import SentinelHubCatalog, DataCollection, SHConfig
+import time
+from datetime import datetime
+from datetime import timedelta
+
+import click
+import dask.dataframe as dd
+import numpy as np
+import pandas as pd
+from dask.distributed import Client
 from oauthlib.oauth2 import BackendApplicationClient
 from requests_oauthlib import OAuth2Session
-import time
-import click
 from sentinelhub import CRS, BBox
+from sentinelhub import SentinelHubCatalog, DataCollection, SHConfig
+
+import eo_io
 
 config_sh = SHConfig()
 config_s3 = eo_io.configuration()
@@ -178,7 +180,8 @@ def matchup(timestamp, lon, lat):
 def main(fname_input, fname_output):
     t1 = time.time()
 
-    df = pd.read_csv(fname_input, parse_dates=[1])
+    nrows = None  # limit the number of rows for testing
+    df = pd.read_csv(fname_input, parse_dates=[8], nrows=nrows, dayfirst=True)
     df = df.iloc[0:100]
     df = df.set_index('Date_Time')
     df['lon_'] = df['LONG']

@@ -1,18 +1,16 @@
-# Example
-# python3 matchup_v1.py "Tag42288_NrM6.csv" "Tag42288_NrM6_eo.csv"
-
-from datetime import timedelta
-import numpy as np
-from sentinelhub import MimeType, CRS, BBox, SentinelHubRequest, DataCollection, SHConfig
-from sentinelhub import SentinelHubCatalog
-from datetime import datetime
-import pandas as pd
-import eo_io
-from functools import lru_cache
-from dask.distributed import Client
-import dask.dataframe as dd
 import time
+from datetime import datetime
+from datetime import timedelta
+from functools import lru_cache
+
 import click
+import dask.dataframe as dd
+import numpy as np
+import pandas as pd
+from dask.distributed import Client
+from sentinelhub import MimeType, CRS, BBox, SentinelHubCatalog, SentinelHubRequest, DataCollection, SHConfig
+
+import eo_io
 
 config_sh = SHConfig()
 config_s3 = eo_io.configuration()
@@ -23,7 +21,7 @@ config_sh.sh_client_secret = config_s3.sh_client_secret
 config_sh.sh_base_url = 'https://creodias.sentinel-hub.com'
 
 RES = 0.0002
-RES_CLOUDS = 0.01
+RES_CLOUDS = 0.01  # The assumption is that the individual clouds cover a large area
 BUFFER_DAYS = 5
 CACHE_SIZE = 2 ** 14
 
@@ -151,12 +149,14 @@ cat = SearchCatalogue(RES, BUFFER_DAYS)
 
 
 def get_acquisition_time_and_eo_data(timestamp, javascript, lon, lat, size):
+    # The catalogue results are inorder of the difference in time between
+    # the satellite acquisition and the tracking timestamp
     search_iterator = sorted(cat.get_results(timestamp, lon, lat),
                              key=lambda x: x[0])
     for search_res in search_iterator:
         acquisition_timestamp = search_res[1]['properties']['datetime']
         data = get_request(acquisition_timestamp, javascript, lon, lat, RES, size)
-        eo_res, cloud_check = list(data[0][0][0])
+        eo_res, cloud_check = list(data[0][0][0])  # eo_res is 256 for the "evalscript_cloud" JavaScript
         yield datetime.strptime(acquisition_timestamp, date_fornat), eo_res, cloud_check
 
 
@@ -174,7 +174,8 @@ def eo_data(timestamp, lon, lat):
     print(timestamp)
     # Get cloud mask for each satellite acquisition, starting from the nearest in time
     # Round the inputs to get some speed ut with LRU cache.
-    for acq_time, _, cloud in get_acquisition_time_and_eo_data_cloud(timestamp.round('6H'), evalscript_cloud,
+    for acq_time, _, cloud in get_acquisition_time_and_eo_data_cloud(timestamp.round('6H'),
+                                                                     evalscript_cloud,
                                                                      RES_CLOUDS * (lon // RES_CLOUDS),
                                                                      RES_CLOUDS * (lat // RES_CLOUDS), (1, 1)):
         if not cloud:
@@ -196,18 +197,20 @@ def eo_data(timestamp, lon, lat):
 def main(fname_input: str, fname_output: str):
     t1 = time.time()
 
-    nrows = 1000  # limit the number of rows for testing
+    nrows = None  # limit the number of rows for testing
     df = pd.read_csv(fname_input, parse_dates=[8], nrows=nrows, dayfirst=True)
-    df = df.set_index('Date_Time')
+    # df = df.set_index('Date_Time')
     df['lon_'] = df['Longitude']
     df['lat_'] = df['Latitude']
 
     ddf = dd.from_pandas(df, npartitions=100)
-    result = ddf.apply(lambda r: eo_data(r.name, r['lon_'], r['lat_']), axis=1, meta=('datetime64[ns]', np.float32))
+    result = ddf.apply(lambda r: eo_data(r.Date_Time, r['lon_'], r['lat_']), axis=1,
+                       meta=('datetime64[ns]', np.float32))
     result = result.compute()
-    result = pd.DataFrame(result.to_list(), index=result.index, columns=('EO_TimeStamp', 'EO_NDMI'))
+    result = pd.DataFrame(result.to_list(), columns=('EO_TimeStamp', 'EO_NDMI'))
     df = df.join(result)
-
+    df.index += 1
+    df.index.name = 'Index'
     del df['lon_']
     del df['lat_']
     df['EO_NDMI'] = df['EO_NDMI'].round(decimals=3)

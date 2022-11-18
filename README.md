@@ -3,6 +3,7 @@
 This code finds the closet in time EO variable for the coordinates/timestamps in the CSV file.
 
 For each tracking point:
+
 ```mermaid
 graph TD
     A(Tracking Point N) --> B[Get next closet in time acquisition cloud mask]
@@ -11,16 +12,20 @@ graph TD
     C --> |Yes| D(Retrieve & store EO value) 
 ```
 
-This is implemented in matchup_v1.py. 
-matchup_v2.py does the same as matchup_v1.py, but uses the Sentinel Hub Statistics API, but it is slower, 
-so use matchup_v1.py.
+The "Get next closet in time acquisition cloud mask" set is done at a coarse resolution,
+and the results are cached, to reduce the number of API requests.
 
+This is implemented in matchup.py.
+matchup_stats_api_test.py does the same as matchup.py, but uses the Sentinel Hub Statistics API, but it is slower,
+so use matchup.py.
 
-# Usage 
+## Usage
 
-    python3 matchup_v1.py in.csv out.csv
+    python3 matchup.py data/sample.csv data/sample_out.csv
 
-# Modify EO variables 
+### Modify EO variables
 
-See "evalscript_ndmi" in the matchup_v1.py for the JavaScript code that returns gets the EO value.
+See "evalscript_ndmi" in the matchup.py for the JavaScript code that returns gets the EO value.
 Modify it to get other EO variables.
+
+You may need to modify the code if the format of CSV with the tracking data changes.
